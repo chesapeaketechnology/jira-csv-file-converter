@@ -14,10 +14,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
@@ -39,7 +39,7 @@ public class UserNameExtractor
     private static final Pattern USER_TAG_PATTERN = Pattern.compile("\\[~([\\w.@-]+?)]");
 
     private final Map<String, List<Integer>> columnNameToIndexMap = new HashMap<>();
-    private final Set<String> uniqueUserNames = new HashSet<>();
+    private final Set<String> uniqueUserNames = new TreeSet<>();
 
     public Set<String> extractUserNames(String jiraCsvFileName)
     {
@@ -64,8 +64,9 @@ public class UserNameExtractor
                 // Next look through all the work logs, which we have to parse to get just the user name
                 parseColumns(record, WORK_LOG_COLUMN_NAME, this::parseWorkLog);
 
+                // TODO: Turns out this isn't necessary due to how Jira imports the comments
                 // And finally the hard part: for comments, we need the name of the commenter and any tags of others
-                parseColumns(record, COMMENT_COLUMN_NAME, this::parseComment);
+//                parseColumns(record, COMMENT_COLUMN_NAME, this::parseComment);
             }
         } catch (IOException e)
         {
