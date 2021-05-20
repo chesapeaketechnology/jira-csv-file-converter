@@ -20,6 +20,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 public class Main
 {
@@ -125,13 +126,13 @@ public class Main
 
         // Look up the user info that corresponds to the usernames in the CSV file from the source Jira instance.
         logger.info("Getting user info from source Jira instance: {}...", sourceJiraService);
-        Map<String, JiraUser> sourceUsersByName = new HashMap<>();
+        Map<String, JiraUser> sourceUsersByName = new TreeMap<>();
         for (String username : csvUsernames)
         {
             JiraUser user = sourceJiraService.findUserByUsername(username);
             if (user != null)
             {
-                logger.info("Found user: {}", user);
+                logger.debug("Found user: {}", user);
                 sourceUsersByName.put(username, user);
             } else
             {
@@ -145,7 +146,7 @@ public class Main
         logger.info("Getting user info from target Jira instance: {}...", targetJiraService);
         boolean lastNameDisplayedFirst = config.getBoolean("us.ctic.jira.source.lastNameDisplayedFirst");
 
-        Map<String, String> sourceUserToTargetUserMap = new HashMap<>();
+        Map<String, String> sourceUserToTargetUserMap = new TreeMap<>();
         for (String sourceUserName : csvUsernames)
         {
             JiraUser sourceUser = sourceUsersByName.get(sourceUserName);
@@ -163,7 +164,7 @@ public class Main
                 JiraUser targetUser = targetJiraService.findUser(null, sourceUser.getEmailAddress(), firstName, lastName);
                 if (targetUser != null)
                 {
-                    logger.info("Found user: {}", targetUser);
+                    logger.debug("Found user: {}", targetUser);
                     sourceUserToTargetUserMap.put(sourceUserName, targetUser.getName());
                 } else
                 {
