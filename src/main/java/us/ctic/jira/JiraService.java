@@ -75,12 +75,18 @@ public class JiraService
         return null;
     }
 
+    private URIBuilder getUriBuilderWithHost()
+    {
+        return new URIBuilder()
+                .setScheme("http")
+                .setHost(host);
+    }
+
     /**
      * Attempts to find the user using the provided username.
      *
      * @param username The username for which to search
      * @return The User or null if not found.
-     * @see <a href="https://docs.atlassian.com/software/jira/docs/api/REST/8.13.5/#api/2/user-findUsers">GET /rest/api/2/user/search</a>
      */
     public JiraUser findUserByUsername(String username)
     {
@@ -88,17 +94,21 @@ public class JiraService
     }
 
     /**
-     * TODO
+     * Attempts to find the user using the provided username, email, last name, and first name, in that order.
      *
+     * @param username  The username for which to search
+     * @param email     The email for the user
+     * @param firstName The first name for the user
+     * @param lastName  The last name for the user
      * @return The User or null if not found.
      * @see <a href="https://docs.atlassian.com/software/jira/docs/api/REST/8.13.5/#api/2/user-findUsers">GET /rest/api/2/user/search</a>
      */
-    public JiraUser findUser(String username, String email, String lastName, String firstName)
+    public JiraUser findUser(String username, String email, String firstName, String lastName)
     {
         try (CloseableHttpClient httpClient = HttpClients.createDefault())
         {
             URIBuilder uriBuilder = getUriBuilderWithHost().setPath(USER_SEARCH_PATH);
-            List<JiraUser> users = null;
+            List<JiraUser> users;
 
             if (username != null)
             {
@@ -111,7 +121,7 @@ public class JiraService
                     }
 
                     // It's possible to find multiple matches since the query isn't applied to just the username. For example,
-                    // for a user name of "john.doe", it may match another user named "john.f.doe" if his email was "john.doe@mail.mil.".
+                    // for a username of "john.doe", it may match another user named "john.f.doe" if his email was "john.doe@gmail.com".
                     // If that happens, return the one with the right username.
                     for (JiraUser user : users)
                     {
@@ -124,10 +134,26 @@ public class JiraService
             {
                 users = findUsers(httpClient, uriBuilder, email);
 
-                // Email should be unique; we should either find exactly one user or none.
                 if (users.size() == 1)
                 {
                     return users.get(0);
+                }
+
+                // Email should be unique, but there may be more than one user for an email address if a service account
+                // reuses a user's email. Let's use the last name or first name to narrow it down.
+                String name = lastName == null ? firstName : lastName;
+                List<JiraUser> usersWithName = filterUsersWithName(name, users);
+
+                if (!usersWithName.isEmpty())
+                {
+                    JiraUser firstUser = usersWithName.get(0);
+                    if (usersWithName.size() > 1)
+                    {
+                        logger.warn("Multiple users found with the email `{}`; returning the first one: {}",
+                                email, firstUser);
+                    }
+
+                    return firstUser;
                 }
             }
 
@@ -152,22 +178,15 @@ public class JiraService
                     // ...but probably not, so refine with the first name (if both were provided)
                     if (lastName != null && firstName != null)
                     {
-                        List<JiraUser> usersWithBothNames = new ArrayList<>();
-                        for (JiraUser user : users)
-                        {
-                            String displayName = user.getDisplayName();
-                            if (displayName.contains(firstName))
-                            {
-                                usersWithBothNames.add(user);
-                            }
-                        }
+                        List<JiraUser> usersWithBothNames = filterUsersWithName(firstName, users);
 
                         if (!usersWithBothNames.isEmpty())
                         {
                             JiraUser firstUser = usersWithBothNames.get(0);
                             if (usersWithBothNames.size() > 1)
                             {
-                                // TODO: this isn't perfect, but not sure what else to do...
+                                // This isn't perfect, but not sure what else to do... hopefully the username mapping
+                                // file will be double checked before the final CSV conversion.
                                 logger.warn("Multiple users found with the name `{} {}`; returning the first one: {}",
                                         firstName, lastName, firstUser);
                             }
@@ -187,6 +206,16 @@ public class JiraService
         return null;
     }
 
+    /**
+     * Queries the Jira instance to find users matching the query string.
+     *
+     * @param httpClient  The HTTP client for the request
+     * @param uriBuilder  A URI builder for constructing the URI for the request
+     * @param queryString The query string for matching users
+     * @return The list of returned users matching the query string
+     * @throws URISyntaxException If the URI is invalid
+     * @throws IOException        If a problem occurred when making the request
+     */
     private List<JiraUser> findUsers(CloseableHttpClient httpClient, URIBuilder uriBuilder, String queryString)
             throws URISyntaxException, IOException
     {
@@ -204,13 +233,36 @@ public class JiraService
         return users;
     }
 
-    private URIBuilder getUriBuilderWithHost()
+    /**
+     * Searches for the users that have the provided name as part of their display name.
+     *
+     * @param name  The name
+     * @param users The users to search
+     * @return The list of users that have the provided name in their display name.
+     */
+    private List<JiraUser> filterUsersWithName(String name, List<JiraUser> users)
     {
-        return new URIBuilder()
-                .setScheme("http")
-                .setHost(host);
+        List<JiraUser> usersWithName = new ArrayList<>();
+        for (JiraUser user : users)
+        {
+            String displayName = user.getDisplayName();
+            if (displayName.contains(name))
+            {
+                usersWithName.add(user);
+            }
+        }
+        return usersWithName;
     }
 
+    @Override
+    public String toString()
+    {
+        return host;
+    }
+
+    /**
+     * The response handler for a server info request.
+     */
     private static class ServerInfoResponseHandler extends AbstractResponseHandler<JiraServerInfo>
     {
         @Override

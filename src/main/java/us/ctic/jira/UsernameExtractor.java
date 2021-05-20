@@ -22,26 +22,43 @@ import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 /**
- * Extracts the set of user names from a CSV file exported from Jira. This is necessary so the user names can be swapped
- * out for the correct user names on the destination Jira server.
+ * Extracts the set of usernames from a CSV file exported from Jira. This is necessary so the usernames can be swapped
+ * out for the correct usernames on the destination Jira server.
  */
-public class UserNameExtractor
+public class UsernameExtractor
 {
     private static final Logger logger = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
     private static final String COMMENT_COLUMN_NAME = "Comment";
     private static final String WORK_LOG_COLUMN_NAME = "Log Work";
 
-    // The names of columns that contain just a user name
+    // The names of columns that contain just a username
     private static final List<String> USER_COLUMN_NAMES = Arrays.asList("Assignee", "Reporter", "Creator", "Watchers");
 
-    // The regex for finding user tags in comments, which are formatted like "[~user.name]".
+    // The regex for finding user tags in comments, which are formatted like "[~username]".
     private static final Pattern USER_TAG_PATTERN = Pattern.compile("\\[~([\\w.@-]+?)]");
 
+    // Map of column name to all the column indices with that name (since Jira reuses column names for things like Comment)
     private final Map<String, List<Integer>> columnNameToIndexMap = new HashMap<>();
-    private final Set<String> uniqueUserNames = new TreeSet<>();
+    private final Set<String> uniqueUsernames = new TreeSet<>();
+    private final String jiraCsvFileName;
 
-    public Set<String> extractUserNames(String jiraCsvFileName)
+    /**
+     * Constructor
+     *
+     * @param jiraCsvFileName The name of the file from which to extract usernames
+     */
+    public UsernameExtractor(String jiraCsvFileName)
+    {
+        this.jiraCsvFileName = jiraCsvFileName;
+    }
+
+    /**
+     * Searches all the relevant columns in the CSV file for usernames and returns the set of unique names.
+     *
+     * @return The set of unique usernames found in the CSV file.
+     */
+    public Set<String> extractUserNames()
     {
         try (Reader reader = new FileReader(jiraCsvFileName);
              CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT))
@@ -58,15 +75,17 @@ public class UserNameExtractor
             {
                 CSVRecord record = records.get(i);
 
-                // First the easy part: get the user names from the columns that only have a username
-                searchUserNameColumns(record);
+                // First the easy part: get the usernames from the columns that only have a username
+                for (String usernameColumn : USER_COLUMN_NAMES)
+                {
+                    applyHandlerToColumns(record, usernameColumn, uniqueUsernames::add);
+                }
 
-                // Next look through all the work logs, which we have to parse to get just the user name
-                parseColumns(record, WORK_LOG_COLUMN_NAME, this::parseWorkLog);
+                // Next look through all the work logs, which we have to parse to get just the username
+                applyHandlerToColumns(record, WORK_LOG_COLUMN_NAME, this::findUsernameInWorkLog);
 
-                // TODO: Turns out this isn't necessary due to how Jira imports the comments
-                // And finally the hard part: for comments, we need the name of the commenter and any tags of others
-//                parseColumns(record, COMMENT_COLUMN_NAME, this::parseComment);
+                // And finally the hard part: for comments, we need the username of the commenter and any tags of others
+                applyHandlerToColumns(record, COMMENT_COLUMN_NAME, this::findUsernamesInComment);
             }
         } catch (IOException e)
         {
@@ -75,11 +94,11 @@ public class UserNameExtractor
 
         // If a column was empty, it will result in an empty string. Instead of checking for that every time, we just
         // remove it at the end.
-        uniqueUserNames.remove("");
+        uniqueUsernames.remove("");
 
-        logger.info("Found {} unique user names.", uniqueUserNames.size());
+        logger.info("Found {} unique usernames.", uniqueUsernames.size());
 
-        return Collections.unmodifiableSet(uniqueUserNames);
+        return Collections.unmodifiableSet(uniqueUsernames);
     }
 
     /**
@@ -98,54 +117,59 @@ public class UserNameExtractor
     }
 
     /**
-     * Search the user name columns for user names to populate the set of unique user names.
+     * Applies the provided column handler to each column with the specified name in the provided row.
      *
-     * @param csvRecord The current CSV row
+     * @param csvRecord     The current CSV row
+     * @param columnName    The name of the column to handle
+     * @param columnHandler The handler to perform the desired action on the columns
      */
-    private void searchUserNameColumns(CSVRecord csvRecord)
-    {
-        for (String userNameColumn : USER_COLUMN_NAMES)
-        {
-            parseColumns(csvRecord, userNameColumn, uniqueUserNames::add);
-        }
-    }
-
-    private void parseColumns(CSVRecord csvRecord, String columnName, Consumer<String> columnParser)
+    private void applyHandlerToColumns(CSVRecord csvRecord, String columnName, Consumer<String> columnHandler)
     {
         List<Integer> columnIndices = columnNameToIndexMap.get(columnName);
 
         for (Integer columnIndex : columnIndices)
         {
             String columnText = csvRecord.get(columnIndex);
-            columnParser.accept(columnText);
+            columnHandler.accept(columnText);
         }
     }
 
-    private void parseWorkLog(String workLog)
+    /**
+     * Searches the provided work log for the username and adds it to the username set.
+     *
+     * @param workLog The work log to search
+     */
+    private void findUsernameInWorkLog(String workLog)
     {
         // A work log is formatted as <comment>;<date>;<user>;<time_minutes>
         String[] workLogFields = workLog.split(";");
 
         if (workLogFields.length >= 3)
         {
-            String userName = workLogFields[2];
-            uniqueUserNames.add(userName);
+            String username = workLogFields[2];
+            uniqueUsernames.add(username);
         }
     }
 
-    private void parseComment(String comment)
+    /**
+     * Searches the provided comment for any usernames and adds them to the username set.
+     *
+     * @param comment The comment to search
+     */
+    private void findUsernamesInComment(String comment)
     {
         // A comment is formatted as <date>;<user>;<text>
         String[] commentFields = comment.split(";", 3);
 
         if (commentFields.length == 3)
         {
-            String userName = commentFields[1];
-            uniqueUserNames.add(userName);
+            String username = commentFields[1];
+            uniqueUsernames.add(username);
 
+            // In addition to the user that wrote the comment, there could be users tagged in the comment
             USER_TAG_PATTERN.matcher(commentFields[2])
                     .results()
-                    .forEach(matchResult -> uniqueUserNames.add(matchResult.group(1)));
+                    .forEach(matchResult -> uniqueUsernames.add(matchResult.group(1)));
         }
     }
 }

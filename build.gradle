@@ -12,12 +12,41 @@ repositories {
 
 dependencies {
     compile 'org.apache.commons:commons-csv:1.8'
+    compile 'org.apache.commons:commons-lang3:3.0'
     compile 'org.apache.httpcomponents:httpclient:4.5.13'
     compile 'com.fasterxml.jackson.core:jackson-databind:2.12.3'
     compile 'org.slf4j:slf4j-log4j12:1.7.29'
     compile 'com.typesafe:config:1.4.1'
 }
 
+def createUserMapArg = "-m"
+def updateCsvFileArg = "-u"
+
 application {
     mainClassName = 'us.ctic.jira.Main'
+}
+
+run {
+    /* Pass all the properties when starting the new JVM */
+    systemProperties System.getProperties()
+
+    args createUserMapArg, updateCsvFileArg
+}
+
+task createUserMap(type: JavaExec) {
+    dependsOn classes
+    classpath sourceSets.main.runtimeClasspath
+    main = application.mainClassName
+    args createUserMapArg
+
+    systemProperties System.getProperties()
+}
+
+task updateCsvFile(type: JavaExec) {
+    dependsOn classes
+    classpath sourceSets.main.runtimeClasspath
+    main = application.mainClassName
+    args updateCsvFileArg
+
+    systemProperties System.getProperties()
 }

@@ -55,5 +55,6 @@ public class ParseUtils
 
     private ParseUtils()
     {
+        // Private constructor to prevent instantiation
     }
 }
