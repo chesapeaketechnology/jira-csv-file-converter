@@ -127,6 +127,8 @@ public class UsernameExtractor
     {
         List<Integer> columnIndices = columnNameToIndexMap.get(columnName);
 
+        if (columnIndices == null) return;
+        
         for (Integer columnIndex : columnIndices)
         {
             String columnText = csvRecord.get(columnIndex);
