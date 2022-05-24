@@ -1,26 +1,44 @@
 package us.ctic.jira;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.http.HttpEntity;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.utils.URIBuilder;
+import org.apache.http.config.Registry;
+import org.apache.http.config.RegistryBuilder;
+import org.apache.http.conn.socket.ConnectionSocketFactory;
+import org.apache.http.conn.socket.PlainConnectionSocketFactory;
+import org.apache.http.conn.ssl.NoopHostnameVerifier;
+import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
 import org.apache.http.impl.client.AbstractResponseHandler;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
+import org.apache.http.impl.conn.BasicHttpClientConnectionManager;
 import org.apache.http.message.BasicHeader;
+import org.apache.http.protocol.HttpContext;
+import org.apache.http.ssl.SSLContexts;
+import org.apache.http.ssl.TrustStrategy;
 import org.apache.http.util.EntityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.net.ssl.SSLContext;
 import java.io.IOException;
 import java.lang.invoke.MethodHandles;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.security.KeyManagementException;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Service for interacting with the necessary Jira REST APIs.
@@ -35,21 +53,37 @@ public class JiraService
     private final static String REST_PATH = "/rest/api/2";
     private final static String SERVER_INFO_PATH = REST_PATH + "/serverInfo";
     private final static String USER_SEARCH_PATH = REST_PATH + "/user/search";
-
+    private final static String ISSUE_TYPE_PATH = REST_PATH + "/issue/createmeta";
+    private final static String PROJECT_KEY_TOKEN = "projectKeys";
+    private final static String EXPAND_TOKEN = "expand";
+    private final static String EXPAND_VALUE = "issuetypeNames";
     private final String host;
+    private final String projectKey;
     private final BasicHeader authorizationHeader;
 
-    public JiraService(String host, String username, String password)
+    public JiraService(String host, String username, String password, String token)
+    {
+        this(host, username, password, token, null);
+    }
+
+    public JiraService(String host, String username, String password, String token, String projectKey)
     {
         this.host = host;
+        this.projectKey = projectKey;
 
         String userPass = username + ":" + password;
-        String encodedCredentials = Base64.getEncoder().encodeToString(userPass.getBytes());
-        authorizationHeader = new BasicHeader("Authorization", "Basic " + encodedCredentials);
+        String encodedCredentials = "Basic " + Base64.getEncoder().encodeToString(userPass.getBytes());
+        if(token != null && !token.isEmpty())
+        {
+            encodedCredentials = "Bearer " + token;
+        }
+        authorizationHeader = new BasicHeader("Authorization", encodedCredentials);
 
         // Perform a test connection to the server
         JiraServerInfo serverInfo = getServerInfo();
         logger.info("Connected to {} (version: {})", serverInfo.getServerTitle(), serverInfo.getVersion());
+
+        OBJECT_MAPPER.enable(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY);
     }
 
     /**
@@ -82,6 +116,25 @@ public class JiraService
                 .setHost(host);
     }
 
+    private CloseableHttpClient getCloseableHttpClient() throws NoSuchAlgorithmException, KeyManagementException, KeyStoreException
+    {
+        //TODO we may need this
+        TrustStrategy acceptingTrustStrategy = (chain, authType) -> true;
+        SSLContext sslContext = SSLContexts.custom().loadTrustMaterial(null, acceptingTrustStrategy).build();
+        SSLConnectionSocketFactory sslConnectionSocketFactory = new SSLConnectionSocketFactory(sslContext, NoopHostnameVerifier.INSTANCE);
+
+        Registry<ConnectionSocketFactory> socketFactoryRegistry = RegistryBuilder.<ConnectionSocketFactory>create()
+                .register("https", sslConnectionSocketFactory)
+                .register("http", new PlainConnectionSocketFactory())
+                .build();
+
+        BasicHttpClientConnectionManager connectionManager = new BasicHttpClientConnectionManager(socketFactoryRegistry);
+        return HttpClients.custom()
+                .setSSLSocketFactory(sslConnectionSocketFactory)
+                .setConnectionManager(connectionManager)
+                .build();
+    }
+
     /**
      * Attempts to find the user using the provided username.
      *
@@ -91,6 +144,32 @@ public class JiraService
     public JiraUser findUserByUsername(String username)
     {
         return findUser(username, null, null, null);
+    }
+
+    /**
+     * Attempts to get all the issue type names from the JIRA server.
+     *
+     * @return a set of all the type names.
+     */
+    public Set<String> getIssueTypeNames()
+    {
+        try (CloseableHttpClient httpClient = HttpClients.createDefault())
+        {
+            URI uri = getUriBuilderWithHost()
+                    .setPath(ISSUE_TYPE_PATH)
+                    .setParameter(PROJECT_KEY_TOKEN, projectKey)
+                    .setParameter(EXPAND_TOKEN, EXPAND_VALUE)
+                    .build();
+            HttpGet httpGet = new HttpGet(uri);
+            httpGet.addHeader(authorizationHeader);
+
+            return httpClient.execute(httpGet, new IssueTypeHandler());
+        }
+        catch (IOException | URISyntaxException e)
+        {
+            logger.error("Error connecting to Jira for issue types with {}", host, e);
+        }
+        return Collections.emptySet();
     }
 
     /**
@@ -200,7 +279,7 @@ public class JiraService
             }
         } catch (IOException | URISyntaxException e)
         {
-            logger.error("Error connecting to Jira for {}", host, e);
+            logger.error("Error connecting to Jira for user names with {}", host, e);
         }
 
         return null;
@@ -292,6 +371,41 @@ public class JiraService
      * Type reference for Jackson to allow mapping the JSON array to a list of users.
      */
     private static class UserListTypeReference extends TypeReference<List<JiraUser>>
+    {
+    }
+
+    /**
+     * Gets the issue types from JIRA for a single project or all
+     */
+    private static class IssueTypeHandler extends AbstractResponseHandler<Set<String>>
+    {
+
+        @Override
+        public Set<String> handleEntity(HttpEntity entity) throws IOException
+        {
+            try
+            {
+                String jsonString = EntityUtils.toString(entity);
+                JiraExpand jiraExpand = OBJECT_MAPPER.readValue(jsonString, new ExpandReference());
+                if(jiraExpand == null)
+                {
+                    return Collections.emptySet();
+                }
+                return jiraExpand.getProjects().stream()
+                        .map(JiraProject::getIssueTypes)
+                        .flatMap(Collection::stream)
+                        .map(JiraIssueType::getName)
+                        .collect(Collectors.toSet());
+            }
+            catch (Exception e)
+            {
+                logger.error("Could not parse project data: ", e);
+            }
+            return Collections.emptySet();
+        }
+    }
+
+    private static class ExpandReference extends TypeReference<JiraExpand>
     {
     }
 }

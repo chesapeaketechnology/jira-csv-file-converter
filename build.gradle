@@ -20,6 +20,7 @@ dependencies {
 }
 
 def createUserMapArg = "-m"
+def createIssueTypeMapArg = "-i"
 def updateCsvFileArg = "-u"
 
 application {
@@ -38,6 +39,15 @@ task createUserMap(type: JavaExec) {
     classpath sourceSets.main.runtimeClasspath
     main = application.mainClassName
     args createUserMapArg
+
+    systemProperties System.getProperties()
+}
+
+task createIssueTypeMap(type: JavaExec) {
+    dependsOn classes
+    classpath sourceSets.main.runtimeClasspath
+    main = application.mainClassName
+    args createIssueTypeMapArg
 
     systemProperties System.getProperties()
 }
