@@ -32,12 +32,12 @@
    `gradlew updateCsvFile -Dconfig.file=application.conf`
 
    
-Note: If an issue type mapping file exists the target CSV file will then be split into files with
+>Note: If an issue type mapping file exists the target CSV file will then be split into files with
 given amount of issues set by `splitFileMaxIssueCount` in the configuration file. The split files will also be
 prioritized in the order that issue type names are present in the file set by `issueTypeMapFileName` in the 
 configuration file.
 
 7. Provide the updated CSV file(s) to a Jira administrator to import into Jira.
 
-Note: it is possible to perform both of these operations at the same time using the `run` task, but it is **not**
+>Note: it is possible to perform both of these operations at the same time using the `run` task, but it is **not**
 recommended due to the potential for users to be mapped incorrectly.
