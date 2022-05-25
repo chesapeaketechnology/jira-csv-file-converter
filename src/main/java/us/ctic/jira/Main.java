@@ -103,12 +103,11 @@ public class Main
         if (updateCsvFile)
         {
             updateCsvFileWithMappings(sourceCsvFileName, targetCsvFileName, mappingsList);
-        }
-
-        if (!issueTypeMapping.isEmpty())
-        {
-            String splitFolder = config.getString("us.ctic.jira.splitTargetFileFolder");
-            orderByIssueTypeAndSplitCsvFileByCount(targetCsvFileName, splitFolder, issueTypeMapping);
+            if (!issueTypeMapping.isEmpty())
+            {
+                String splitFolder = config.getString("us.ctic.jira.splitTargetFileFolder");
+                orderByIssueTypeAndSplitCsvFileByCount(targetCsvFileName, splitFolder, issueTypeMapping);
+            }
         }
     }
 

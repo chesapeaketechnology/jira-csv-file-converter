@@ -21,13 +21,23 @@
    exist on the target instance may not be found if they have a different email and their name was misspelled or entered
    differently (e.g. Steve vs Steven).
 
-5. Execute the `updateCsvFile` task to update the CSV export based on the mapping file:
+5. Execute the 'createIssueTypeMap' task to search the source JIRA and create a mapping file to the target JIRA for 
+   the projectKey list in the application configuration file.  
+   Use `gradlew createIssueTypeMap -Dconfig.file=path/to/config-file` to generate an issue type mapping file.
+
+6. Execute the `updateCsvFile` task to update the CSV export based on the mapping files:
    `gradlew updateCsvFile -Dconfig.file=path/to/config-file`
 
    For example, if the config file was copied to the root of the repo:
    `gradlew updateCsvFile -Dconfig.file=application.conf`
 
-6. Provide the updated CSV file to a Jira administrator to import into Jira.
+   
+Note: If an issue type mapping file exists the target CSV file will then be split into files with
+given amount of issues set by `splitFileMaxIssueCount` in the configuration file. The split files will also be
+prioritized in the order that issue type names are present in the file set by `issueTypeMapFileName` in the 
+configuration file.
+
+7. Provide the updated CSV file(s) to a Jira administrator to import into Jira.
 
 Note: it is possible to perform both of these operations at the same time using the `run` task, but it is **not**
 recommended due to the potential for users to be mapped incorrectly.
