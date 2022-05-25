@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.FileWriter;
@@ -20,13 +21,16 @@ import java.io.PrintWriter;
 import java.io.Reader;
 import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -46,7 +50,6 @@ public class Main
     private static boolean updateCsvFile = false;
     private static boolean createIssueTypeMap = false;
 
-
     /**
      * Main method for updating Jira CSV files for porting to a new instance.
      *
@@ -58,12 +61,31 @@ public class Main
     {
         processCommandLineArguments(args);
 
-        String sourceCsvFileName = config.getString("us.ctic.jira.source.csvFileName");
+        Set<String> csvUsernames = new HashSet<>();
+        String sourceCsvFolderPath = config.getString("us.ctic.jira.source.csvFolderName");
+        List<String> sourceCsvFileNames = new ArrayList<>();
+        if (!sourceCsvFolderPath.isEmpty())
+        {
+            logger.info("Extracting usernames from the folder at: {}, ignoring the single csv file", sourceCsvFolderPath);
+            File csvFolder = new File(sourceCsvFolderPath);
+            sourceCsvFileNames = Arrays.stream(Objects.requireNonNull(csvFolder.listFiles((dir, name) -> name.toLowerCase().endsWith(".csv"))))
+                    .map(File::getAbsolutePath)
+                    .collect(Collectors.toList());
 
-        // First we need to find all the unique usernames in the exported CSV file
-        logger.info("Extracting usernames from: {}", sourceCsvFileName);
-        UsernameExtractor usernameExtractor = new UsernameExtractor(sourceCsvFileName);
-        Set<String> csvUsernames = usernameExtractor.extractUserNames();
+            csvUsernames.addAll(sourceCsvFileNames.stream()
+                    .map(UsernameExtractor::new)
+                    .map(UsernameExtractor::extractUserNames)
+                    .flatMap(Collection::stream)
+                    .collect(Collectors.toSet()));
+        } else
+        {
+            String sourceCsvFileName = config.getString("us.ctic.jira.source.csvFileName");
+            // First we need to find all the unique usernames in the exported CSV file
+            logger.info("Extracting usernames from a single file: {}, source csv folder was not set", sourceCsvFileName);
+            sourceCsvFileNames.add(sourceCsvFileName);
+            UsernameExtractor usernameExtractor = new UsernameExtractor(sourceCsvFileName);
+            csvUsernames.addAll(usernameExtractor.extractUserNames());
+        }
 
         Map<String, String> usernameMapping;
         String userMapCsvFileName = config.getString("us.ctic.jira.userMapFileName");
@@ -102,10 +124,10 @@ public class Main
 
         if (updateCsvFile)
         {
-            updateCsvFileWithMappings(sourceCsvFileName, targetCsvFileName, mappingsList);
+            updateCsvFileWithMappings(sourceCsvFileNames, targetCsvFileName, mappingsList);
             if (!issueTypeMapping.isEmpty())
             {
-                String splitFolder = config.getString("us.ctic.jira.splitTargetFileFolder");
+                String splitFolder = config.getString("us.ctic.jira.target.csvFolderName");
                 orderByIssueTypeAndSplitCsvFileByCount(targetCsvFileName, splitFolder, issueTypeMapping);
             }
         }
@@ -129,6 +151,7 @@ public class Main
 
     /**
      * Create the mapping file for issue types from the source JIRA to the target JIRA.
+     *
      * @return map of source JIRA issue type names, to target JIRA issue type names.
      */
     private static Map<String, String> createIssueTypeMapping()
@@ -159,6 +182,7 @@ public class Main
 
     /**
      * Replaces anything matching {@code NO_TARGET_MATCH} in the map values with the key.
+     *
      * @param mapping mapping to clean
      * @return map with all valid values
      */
@@ -431,27 +455,31 @@ public class Main
      * Replaces all occurrences of source mappings in the specified CSV file and outputs the result to the target CSV
      * file (specified in the config settings).
      *
-     * @param sourceCsvFileName The file to update
+     * @param sourceCsvFiles    The files to update
      * @param targetCsvFileName The file to save the update to
      * @param mappingsList      List of mapping files
      */
-    private static void updateCsvFileWithMappings(String sourceCsvFileName, String targetCsvFileName, List<Map<String, String>> mappingsList)
+    private static void updateCsvFileWithMappings(List<String> sourceCsvFiles, String targetCsvFileName, List<Map<String, String>> mappingsList)
     {
-        logger.info("Updating usernames in CSV file and writing to {}...", targetCsvFileName);
-
-        // Replace all instances of the source usernames in the CSV file with the target usernames.
-        // For any source usernames that don't exist in the target Jira instance, the default username will be used.
-        try (BufferedReader bufferedReader = new BufferedReader(new FileReader(sourceCsvFileName));
-             PrintWriter writer = new PrintWriter(targetCsvFileName))
+        logger.info("Updating usernames in CSV file(s) and writing to {}...", targetCsvFileName);
+        try
         {
-            String[] sourceNames = mappingsList.stream().map(Map::keySet).flatMap(Collection::stream).toArray(String[]::new);
-            String[] targetNames = mappingsList.stream().map(Map::values).flatMap(Collection::stream).toArray(String[]::new);
-
-            String line;
-            while ((line = bufferedReader.readLine()) != null)
+            PrintWriter writer = new PrintWriter(targetCsvFileName);
+            for (String sourceCsvFileName : sourceCsvFiles)
             {
-                String updatedLine = StringUtils.replaceEach(line, sourceNames, targetNames);
-                writer.println(updatedLine);
+                // Replace all instances of the source usernames in the CSV file with the target usernames.
+                // For any source usernames that don't exist in the target Jira instance, the default username will be used.
+                BufferedReader bufferedReader = new BufferedReader(new FileReader(sourceCsvFileName));
+
+                String[] sourceNames = mappingsList.stream().map(Map::keySet).flatMap(Collection::stream).toArray(String[]::new);
+                String[] targetNames = mappingsList.stream().map(Map::values).flatMap(Collection::stream).toArray(String[]::new);
+
+                String line;
+                while ((line = bufferedReader.readLine()) != null)
+                {
+                    String updatedLine = StringUtils.replaceEach(line, sourceNames, targetNames);
+                    writer.println(updatedLine);
+                }
             }
         } catch (IOException e)
         {
