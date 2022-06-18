@@ -13,6 +13,7 @@ import java.util.stream.Collectors;
 public class ParseUtils
 {
     private static final Logger logger = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
+    private static final Pattern ACCOUNT_REMOVED_PATTERN = Pattern.compile("\\[X]", Pattern.CASE_INSENSITIVE);
     private static final Pattern ADMIN_PATTERN = Pattern.compile("\\(admin\\)", Pattern.CASE_INSENSITIVE);
     private static final Pattern MIDDLE_INITIAL_PATTERN = Pattern.compile("[a-z]", Pattern.CASE_INSENSITIVE);
     private static final Pattern SUFFIX_PATTERN = Pattern.compile("jr|sr|i{1,3}", Pattern.CASE_INSENSITIVE);
@@ -30,9 +31,10 @@ public class ParseUtils
 
         // This is pretty naive, but it works for users I have with the two Jira instances I am working with,
         // which use the following formats:
-        // - "First <M.> Last <Suffix> <(Admin)>"
+        // - "First <M.> Last <Suffix> <(Admin)> <[X]>"
         // - "Last <Suffix>, First <M.>"
         List<String> remainingNames = Arrays.stream(names)
+                .filter(name -> !ACCOUNT_REMOVED_PATTERN.matcher(name).matches())
                 .filter(name -> !ADMIN_PATTERN.matcher(name).matches())
                 .filter(name -> !MIDDLE_INITIAL_PATTERN.matcher(name).matches())
                 .filter(name -> !SUFFIX_PATTERN.matcher(name).matches())

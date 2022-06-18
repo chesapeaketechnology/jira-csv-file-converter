@@ -6,14 +6,12 @@ import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVPrinter;
 import org.apache.commons.csv.CSVRecord;
-import org.apache.commons.csv.QuoteMode;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -30,7 +28,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.TreeSet;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -303,7 +300,7 @@ public class Main
                         writer.close();
                     }
                     String fileName = "JiraCsvSplit" + "_" + pageNumber + ".csv";
-                    writer = new FileWriter(splitFolder + fileName);
+                    writer = new FileWriter(splitFolder + File.separator + fileName);
                     csvPrinter = new CSVPrinter(writer, CSVFormat.DEFAULT.withHeader(headerRowArray));
                     logger.debug("Creating csv file: {}", fileName);
                 }
@@ -462,9 +459,8 @@ public class Main
     private static void updateCsvFileWithMappings(List<String> sourceCsvFiles, String targetCsvFileName, List<Map<String, String>> mappingsList)
     {
         logger.info("Updating usernames in CSV file(s) and writing to {}...", targetCsvFileName);
-        try
+        try (PrintWriter writer = new PrintWriter(targetCsvFileName))
         {
-            PrintWriter writer = new PrintWriter(targetCsvFileName);
             for (String sourceCsvFileName : sourceCsvFiles)
             {
                 // Replace all instances of the source usernames in the CSV file with the target usernames.
