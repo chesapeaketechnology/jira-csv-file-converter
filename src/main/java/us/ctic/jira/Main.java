@@ -127,10 +127,14 @@ public class Main
 
             String targetCsvFileName = config.getString("us.ctic.jira.target.csvFileName");
             updateCsvFileWithMappings(sourceCsvFileNames, targetCsvFileName, mappingsList);
+
+            final EmptyColumnRemover emptyColumnRemover = new EmptyColumnRemover(targetCsvFileName);
+            final String newTargetCsvFileName = emptyColumnRemover.removeEmptyColumns();
+
             if (!issueTypeMapping.isEmpty())
             {
                 String splitFolder = config.getString("us.ctic.jira.target.csvFolderName");
-                orderByIssueTypeAndSplitCsvFileByCount(targetCsvFileName, splitFolder, issueTypeMapping);
+                orderByIssueTypeAndSplitCsvFileByCount(newTargetCsvFileName, splitFolder, issueTypeMapping);
             }
         }
     }
