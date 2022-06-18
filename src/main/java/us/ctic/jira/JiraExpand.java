@@ -2,8 +2,10 @@ package us.ctic.jira;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+import java.util.Collections;
 import java.util.List;
 
+@SuppressWarnings("unused") // Fields are being set by Jackson
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class JiraExpand
 {
@@ -17,7 +19,7 @@ public class JiraExpand
 
     public List<JiraProject> getProjects()
     {
-        return projects;
+        return Collections.unmodifiableList(projects);
     }
 
     @Override

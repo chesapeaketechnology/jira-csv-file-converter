@@ -21,6 +21,7 @@ import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,51 +38,54 @@ public class Main
     private static final Logger logger = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
     private static final Config config = ConfigFactory.load();
 
-    private static final int splitCount = config.getInt("us.ctic.jira.splitFileMaxIssueCount");
+    private static final String CONFIG_PREFIX = "us.ctic.jira.";
     private static final String SOURCE = "source";
     private static final String TARGET = "target";
     private static final String NO_TARGET_MATCH = "NO_TARGET_MATCH";
     private static final String ISSUE_TYPE_CSV_KEY = "Issue Type";
+    private static final int SPLIT_COUNT = config.getInt("us.ctic.jira.splitFileMaxIssueCount");
 
     private static boolean createUserMap = false;
     private static boolean updateCsvFile = false;
     private static boolean createIssueTypeMap = false;
+    private static JiraService sourceJiraService;
+    private static JiraService targetJiraService;
 
     /**
      * Main method for updating Jira CSV files for porting to a new instance.
      *
      * @param args Command line arguments; allowed arguments are:
      *             -m   Create a file mapping usernames found in the CSV to usernames in the target Jira instance.
+     *             -i   Create issue type map file
      *             -u   Update the provided CSV file to replace usernames using the mapping
      */
     public static void main(String[] args)
     {
+        // First determine which tasks will be executed this run
         processCommandLineArguments(args);
 
-        Set<String> csvUsernames = new HashSet<>();
-        String sourceCsvFolderPath = config.getString("us.ctic.jira.source.csvFolderName");
-        List<String> sourceCsvFileNames = new ArrayList<>();
-        if (!sourceCsvFolderPath.isEmpty())
-        {
-            logger.info("Extracting usernames from the folder at: {}, ignoring the single csv file", sourceCsvFolderPath);
-            File csvFolder = new File(sourceCsvFolderPath);
-            sourceCsvFileNames = Arrays.stream(Objects.requireNonNull(csvFolder.listFiles((dir, name) -> name.toLowerCase().endsWith(".csv"))))
-                    .map(File::getAbsolutePath)
-                    .collect(Collectors.toList());
+        List<String> sourceCsvFileNames = getSourceFileNames();
 
+        Set<String> csvUsernames = new HashSet<>();
+        if (createUserMap || updateCsvFile)
+        {
+            // Next we need to find all the unique usernames in the exported CSV file(s). If we are creating a user
+            // mapping, these will be mapped and stored in a file. If we are updating the CSV file, they will be
+            // replaced from the user mapping.
+            logger.info("Extracting usernames from: {}", sourceCsvFileNames);
             csvUsernames.addAll(sourceCsvFileNames.stream()
                     .map(UsernameExtractor::new)
                     .map(UsernameExtractor::extractUserNames)
                     .flatMap(Collection::stream)
                     .collect(Collectors.toSet()));
-        } else
+        }
+
+        // We need to connect to the servers for either mapping task
+        if (createUserMap || createIssueTypeMap)
         {
-            String sourceCsvFileName = config.getString("us.ctic.jira.source.csvFileName");
-            // First we need to find all the unique usernames in the exported CSV file
-            logger.info("Extracting usernames from a single file: {}, source csv folder was not set", sourceCsvFileName);
-            sourceCsvFileNames.add(sourceCsvFileName);
-            UsernameExtractor usernameExtractor = new UsernameExtractor(sourceCsvFileName);
-            csvUsernames.addAll(usernameExtractor.extractUserNames());
+            logger.info("Connecting to Jira servers...");
+            sourceJiraService = getJiraService(SOURCE);
+            targetJiraService = getJiraService(TARGET);
         }
 
         Map<String, String> usernameMapping;
@@ -92,10 +96,12 @@ public class Main
             usernameMapping = createUsernameMapping(csvUsernames);
 
             // Write the mapping to a file so we don't have to do this again next time since it takes so long
+            logger.info("Writing user type mapping to file {}", userMapCsvFileName);
             writeMappingToFile(usernameMapping, userMapCsvFileName, "User Mapping");
         } else
         {
             usernameMapping = populateMappingFromFile(userMapCsvFileName);
+            logger.info("Populated user type mapping from file {}", userMapCsvFileName);
         }
 
         Map<String, String> issueTypeMapping;
@@ -103,24 +109,23 @@ public class Main
         if (createIssueTypeMap)
         {
             issueTypeMapping = createIssueTypeMapping();
-
+            logger.info("Writing issue type mapping to file {}: {}", issueTypeMapCsvFileName, issueTypeMapping);
             writeMappingToFile(issueTypeMapping, issueTypeMapCsvFileName, "Issue Type Mapping");
         } else
         {
             issueTypeMapping = populateMappingFromFile(issueTypeMapCsvFileName);
+            logger.info("Populated issue type mapping from file {}: {}", issueTypeMapCsvFileName, issueTypeMapping);
         }
-
-        usernameMapping = cleanMappings(usernameMapping);
-        issueTypeMapping = cleanMappings(issueTypeMapping);
-
-        List<Map<String, String>> mappingsList = new ArrayList<>();
-        mappingsList.add(usernameMapping);
-        mappingsList.add(issueTypeMapping);
-
-        String targetCsvFileName = config.getString("us.ctic.jira.target.csvFileName");
 
         if (updateCsvFile)
         {
+            issueTypeMapping = cleanMappings(issueTypeMapping);
+
+            List<Map<String, String>> mappingsList = new ArrayList<>();
+            mappingsList.add(usernameMapping);
+            mappingsList.add(issueTypeMapping);
+
+            String targetCsvFileName = config.getString("us.ctic.jira.target.csvFileName");
             updateCsvFileWithMappings(sourceCsvFileNames, targetCsvFileName, mappingsList);
             if (!issueTypeMapping.isEmpty())
             {
@@ -128,73 +133,6 @@ public class Main
                 orderByIssueTypeAndSplitCsvFileByCount(targetCsvFileName, splitFolder, issueTypeMapping);
             }
         }
-    }
-
-    /**
-     * Connects to a JIRA service for the given type.
-     *
-     * @param serviceType the type defined in the config file (source, or target)
-     * @return jira service of that type
-     */
-    private static JiraService getJiraService(String serviceType)
-    {
-        String host = config.getString("us.ctic.jira." + serviceType + ".host");
-        String username = config.getString("us.ctic.jira." + serviceType + ".username");
-        String password = config.getString("us.ctic.jira." + serviceType + ".password");
-        String token = config.getString("us.ctic.jira." + serviceType + ".token");
-        String projectKey = config.getString("us.ctic.jira." + serviceType + ".projectKey");
-        return new JiraService(host, username, password, token, projectKey);
-    }
-
-    /**
-     * Create the mapping file for issue types from the source JIRA to the target JIRA.
-     *
-     * @return map of source JIRA issue type names, to target JIRA issue type names.
-     */
-    private static Map<String, String> createIssueTypeMapping()
-    {
-        logger.info("Connecting to Jira servers...");
-        JiraService sourceJiraService = getJiraService(SOURCE);
-        JiraService targetJiraService = getJiraService(TARGET);
-
-        Set<String> sourceIssueTypeNames = sourceJiraService.getIssueTypeNames();
-        logger.info("Found {} source issue type names.", sourceIssueTypeNames.size());
-        Set<String> targetIssueTypeNames = targetJiraService.getIssueTypeNames();
-        logger.info("Found {} target issue type names.", targetIssueTypeNames.size());
-
-        logger.info("Creating issue type mapping...");
-        Map<String, String> issueTypeMapping = new LinkedHashMap<>();
-        for (String sourceIssueTypeName : sourceIssueTypeNames)
-        {
-            String targetMatchName = targetIssueTypeNames.stream()
-                    .filter(sourceIssueTypeName::contains)
-                    .findFirst()
-                    .orElse(NO_TARGET_MATCH);
-            issueTypeMapping.put(sourceIssueTypeName, targetMatchName);
-        }
-        logger.info("Completed issue type mapping.");
-
-        return issueTypeMapping;
-    }
-
-    /**
-     * Replaces anything matching {@code NO_TARGET_MATCH} in the map values with the key.
-     *
-     * @param mapping mapping to clean
-     * @return map with all valid values
-     */
-    private static Map<String, String> cleanMappings(Map<String, String> mapping)
-    {
-        return mapping.entrySet().stream()
-                .collect(Collectors.toMap(Map.Entry::getKey, entry ->
-                                entry.getValue().equals(NO_TARGET_MATCH)
-                                        ? entry.getKey()
-                                        : entry.getValue(),
-                        (s, s2) -> {
-                            logger.info("Duplicate mapping entry found for {}, using first one in list.", s);
-                            return s;
-                        },
-                        LinkedHashMap::new));
     }
 
     /**
@@ -225,98 +163,68 @@ public class Main
         }
     }
 
-    private static void orderByIssueTypeAndSplitCsvFileByCount(String sourceCsvFileName, String splitFolder, Map<String, String> issueTypeMap)
+    /**
+     * Get the list of source files for CSV data. This could either be all files in a specified directory, or just a
+     * single file if a directory wasn't specified.
+     *
+     * @return List of input CSV files.
+     * @since 1.1
+     */
+    private static List<String> getSourceFileNames()
     {
-        List<String> headerRow;
-        List<CSVRecord> records;
-        try (Reader reader = new FileReader(sourceCsvFileName);
-             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withHeader()))
+        List<String> sourceCsvFileNames;
+
+        String sourceCsvFolderPath = config.getString("us.ctic.jira.source.csvFolderName");
+        if (!sourceCsvFolderPath.isEmpty())
         {
-            headerRow = new ArrayList<>(csvParser.getHeaderNames());
-            records = new ArrayList<>(csvParser.getRecords());
-        } catch (IOException e)
-        {
-            logger.error("Error reading csv for splitting: {}", sourceCsvFileName, e);
-            return;
-        }
+            logger.info("Selecting input CSV files from the folder at: {}, ignoring the single csv file", sourceCsvFolderPath);
+            File csvFolder = new File(sourceCsvFolderPath);
 
-        if (headerRow.isEmpty() || records.isEmpty())
-        {
-            logger.error("No jira issues found in CSV files.");
-            return;
-        }
-
-        int issueTypePosition = headerRow.indexOf(ISSUE_TYPE_CSV_KEY);
-        if (issueTypePosition == -1)
-        {
-            logger.error("Could not find an issue type in the csv file.");
-            return;
-        }
-
-        Map<String, List<CSVRecord>> csvByIssueType = records.stream()
-                .collect(Collectors.groupingBy(strings -> strings.get(issueTypePosition)));
-
-        List<String> orderedIssueTypes = issueTypeMap.values().stream()
-                .distinct()
-                .collect(Collectors.toList());
-
-        List<String> unOrderedIssueTypes = csvByIssueType.keySet().stream()
-                .filter(Predicate.not(orderedIssueTypes::contains))
-                .collect(Collectors.toList());
-
-        if (!unOrderedIssueTypes.isEmpty())
-        {
-            logger.warn("Found Issue Types in the CSV file that were not in the project issue type mapping " +
-                    "file: {}", String.join(", ", unOrderedIssueTypes));
-        }
-        List<String> allIssueTypesInOrder = Stream.concat(orderedIssueTypes.stream(), unOrderedIssueTypes.stream())
-                .collect(Collectors.toList());
-
-        List<CSVRecord> orderedCsvRecords = allIssueTypesInOrder.stream()
-                .map(csvByIssueType::get)
-                .filter(Objects::nonNull)
-                .flatMap(Collection::stream)
-                .collect(Collectors.toList());
-        //orderedRecords.add(0, headerRow);
-
-        logger.info("Beginning splitting csv file for {} records.", orderedCsvRecords.size());
-        FileWriter writer = null;
-        CSVPrinter csvPrinter = null;
-        int previousPageNumber = 0;
-        String[] headerRowArray = new String[headerRow.size()];
-        headerRowArray = headerRow.toArray(headerRowArray);
-        try
-        {
-            for (int index = 0; index < orderedCsvRecords.size(); index++)
+            if (!csvFolder.isDirectory())
             {
-                int remainder = (index + 1) % splitCount == 0 ? 0 : 1;
-                int pageNumber = (index + 1) / splitCount + remainder;
+                logger.error("Provided path is not a directory: {}", sourceCsvFolderPath);
+                return Collections.emptyList();
+            }
 
-                if (writer == null || previousPageNumber != pageNumber)
-                {
-                    if (writer != null)
-                    {
-                        // Always close previous files before we make a new one
-                        writer.close();
-                    }
-                    String fileName = "JiraCsvSplit" + "_" + pageNumber + ".csv";
-                    writer = new FileWriter(splitFolder + File.separator + fileName);
-                    csvPrinter = new CSVPrinter(writer, CSVFormat.DEFAULT.withHeader(headerRowArray));
-                    logger.debug("Creating csv file: {}", fileName);
-                }
-                csvPrinter.printRecord(orderedCsvRecords.get(index));
-                previousPageNumber = pageNumber;
-            }
-            //Completed
-            logger.info("Completed splitting csv into {} files.", previousPageNumber);
-            if (writer != null)
+            final File[] csvFiles = csvFolder.listFiles((dir, name) -> name.toLowerCase().endsWith(".csv"));
+
+            if (csvFiles == null)
             {
-                writer.close();
+                logger.error("An error occurred attempting to read from directory {}", sourceCsvFolderPath);
+                return Collections.emptyList();
+            } else if (csvFiles.length == 0)
+            {
+                logger.error("No CSV files found in directory {}", sourceCsvFolderPath);
+                return Collections.emptyList();
             }
-        } catch (IOException e)
+
+            sourceCsvFileNames = Arrays.stream(csvFiles)
+                    .map(File::getAbsolutePath)
+                    .collect(Collectors.toList());
+        } else
         {
-            logger.error("Error creating a split csv file for: {}", sourceCsvFileName, e);
+            String sourceCsvFileName = config.getString("us.ctic.jira.source.csvFileName");
+            logger.info("Using a single CSV as the input: {}, source csv folder was not set", sourceCsvFileName);
+            sourceCsvFileNames = List.of(sourceCsvFileName);
         }
+
+        return sourceCsvFileNames;
+    }
+
+    /**
+     * Connects to a JIRA service for the given type.
+     *
+     * @param serviceType the type defined in the config file (source, or target)
+     * @return jira service of that type
+     */
+    private static JiraService getJiraService(String serviceType)
+    {
+        String host = config.getString(CONFIG_PREFIX + serviceType + ".host");
+        String username = config.getString(CONFIG_PREFIX + serviceType + ".username");
+        String password = config.getString(CONFIG_PREFIX + serviceType + ".password");
+        String token = config.getString(CONFIG_PREFIX + serviceType + ".token");
+        String projectKey = config.getString(CONFIG_PREFIX + serviceType + ".projectKey");
+        return new JiraService(host, username, password, token, projectKey);
     }
 
     /**
@@ -328,10 +236,6 @@ public class Main
      */
     private static Map<String, String> createUsernameMapping(Set<String> csvUsernames)
     {
-        logger.info("Connecting to Jira servers...");
-        JiraService sourceJiraService = getJiraService(SOURCE);
-        JiraService targetJiraService = getJiraService(TARGET);
-
         String defaultTargetUsername = config.getString("us.ctic.jira.target.defaultUsername");
 
         logger.info("Verifying default user {} exists on target server...", defaultTargetUsername);
@@ -402,7 +306,7 @@ public class Main
     }
 
     /**
-     * Writes the provided mapping to the specified file as comma-separated values
+     * Writes the provided mapping to the specified file as comma-separated values.
      *
      * @param mapping            The mapping of source object to target object
      * @param csvFilename        The name of the file to which to write
@@ -426,11 +330,11 @@ public class Main
     }
 
     /**
-     * Parses the specified file to populate a map of source usernames to target usernames. Each line of the file
-     * should be in the format: {@code source-user-name,target-user-name}
+     * Parses the specified file to populate a map of values. Each line of the file should be in the format:
+     * {@code source-value,target-value}
      *
      * @param mapCsvFileName The name of the file to parse
-     * @return A map of source keys to target keys (ie usernames, or issue types)
+     * @return A map of source keys to target keys (i.e., usernames or issue types)
      */
     private static Map<String, String> populateMappingFromFile(String mapCsvFileName)
     {
@@ -449,6 +353,162 @@ public class Main
     }
 
     /**
+     * Create the mapping file for issue types from the source JIRA to the target JIRA.
+     *
+     * @return map of source JIRA issue type names to target JIRA issue type names.
+     */
+    private static Map<String, String> createIssueTypeMapping()
+    {
+        Set<String> sourceIssueTypeNames = sourceJiraService.getIssueTypeNames();
+        logger.info("Found {} source issue type names.", sourceIssueTypeNames.size());
+        Set<String> targetIssueTypeNames = targetJiraService.getIssueTypeNames();
+        logger.info("Found {} target issue type names.", targetIssueTypeNames.size());
+
+        logger.info("Creating issue type mapping...");
+        Map<String, String> issueTypeMapping = new LinkedHashMap<>();
+        for (String sourceIssueTypeName : sourceIssueTypeNames)
+        {
+            // TODO KMB: Perhaps I'm missing something, but why not just do something like this? Why are we looking for
+            //  a target string containing the source type instead of equality?
+            //   issueTypeMapping.put(sourceIssueTypeName,
+            //           targetIssueTypeNames.contains(sourceIssueTypeName) ? sourceIssueTypeName : NO_TARGET_MATCH);
+            String targetMatchName = targetIssueTypeNames.stream()
+                    .filter(sourceIssueTypeName::contains)
+                    .findFirst()
+                    .orElse(NO_TARGET_MATCH);
+            issueTypeMapping.put(sourceIssueTypeName, targetMatchName);
+        }
+
+        // TODO KMB: Currently the issue types need to be sorted manually. Do we want to add something for that here so
+        //  epics are first and subtasks are last? It should probably be something in the config file...
+
+        logger.info("Completed issue type mapping: {}", issueTypeMapping);
+        return issueTypeMapping;
+    }
+
+    /**
+     * Replaces anything matching {@code NO_TARGET_MATCH} in the map values with the key.
+     *
+     * @param mapping mapping to clean
+     * @return map with all valid values
+     */
+    private static Map<String, String> cleanMappings(Map<String, String> mapping)
+    {
+        // TODO KMB: Why even bother to create the mapping if we are just going to update it later to remove any without
+        //  a target match?
+        return mapping.entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, entry ->
+                                entry.getValue().equals(NO_TARGET_MATCH)
+                                        ? entry.getKey()
+                                        : entry.getValue(),
+                        (s, s2) -> {
+                            logger.info("Duplicate mapping entry found for {}, using first one in list.", s);
+                            return s;
+                        },
+                        LinkedHashMap::new));
+    }
+
+    /**
+     * Sorts the issues in the provided source file by issue type and splits them into separate files in the specified
+     * folder with no more than the maximum number of issues.
+     *
+     * @param sourceCsvFileName The CSV file containing all of the issues
+     * @param splitFolder       The folder to which to save the new split files
+     * @param issueTypeMap      A mapping of issues types for sorting the issues
+     */
+    private static void orderByIssueTypeAndSplitCsvFileByCount(String sourceCsvFileName, String splitFolder,
+                                                               Map<String, String> issueTypeMap)
+    {
+        List<String> headerRow;
+        List<CSVRecord> records;
+        try (Reader reader = new FileReader(sourceCsvFileName);
+             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withHeader()))
+        {
+            headerRow = new ArrayList<>(csvParser.getHeaderNames());
+            records = new ArrayList<>(csvParser.getRecords());
+        } catch (IOException e)
+        {
+            logger.error("Error reading csv for splitting: {}", sourceCsvFileName, e);
+            return;
+        }
+
+        if (headerRow.isEmpty() || records.isEmpty())
+        {
+            logger.error("No jira issues found in CSV file(s).");
+            return;
+        }
+
+        int issueTypePosition = headerRow.indexOf(ISSUE_TYPE_CSV_KEY);
+        if (issueTypePosition == -1)
+        {
+            logger.error("Could not find an issue type column in the CSV file.");
+            return;
+        }
+
+        Map<String, List<CSVRecord>> csvByIssueType = records.stream()
+                .collect(Collectors.groupingBy(strings -> strings.get(issueTypePosition)));
+
+        List<String> orderedIssueTypes = issueTypeMap.values().stream()
+                .distinct()
+                .collect(Collectors.toList());
+
+        List<String> unOrderedIssueTypes = csvByIssueType.keySet().stream()
+                .filter(Predicate.not(orderedIssueTypes::contains))
+                .collect(Collectors.toList());
+
+        if (!unOrderedIssueTypes.isEmpty())
+        {
+            logger.warn("Found Issue Types in the CSV file that were not in the project issue type mapping file: {}",
+                    String.join(", ", unOrderedIssueTypes));
+        }
+
+        List<String> allIssueTypesInOrder = Stream.concat(orderedIssueTypes.stream(), unOrderedIssueTypes.stream())
+                .collect(Collectors.toList());
+
+        List<CSVRecord> orderedCsvRecords = allIssueTypesInOrder.stream()
+                .map(csvByIssueType::get)
+                .filter(Objects::nonNull)
+                .flatMap(Collection::stream)
+                .collect(Collectors.toList());
+
+        logger.info("Beginning splitting csv file for {} records.", orderedCsvRecords.size());
+        FileWriter writer = null;
+        CSVPrinter csvPrinter = null;
+        int previousFileNumber = 0;
+        String[] headerRowArray = new String[headerRow.size()];
+        headerRowArray = headerRow.toArray(headerRowArray);
+
+        final String fileNamePrefix = ParseUtils.getFileNameWithoutPathOrExtension(sourceCsvFileName);
+        try
+        {
+            for (int index = 0; index < orderedCsvRecords.size(); index++)
+            {
+                int remainder = (index + 1) % SPLIT_COUNT == 0 ? 0 : 1;
+                int fileNumber = (index + 1) / SPLIT_COUNT + remainder;
+
+                if (writer == null || previousFileNumber != fileNumber)
+                {
+                    // Always close previous file before we make a new one
+                    if (writer != null) writer.close();
+
+                    String fileName = fileNamePrefix + "_Split_" + fileNumber + ".csv";
+                    writer = new FileWriter(splitFolder + File.separator + fileName);
+                    csvPrinter = new CSVPrinter(writer, CSVFormat.DEFAULT.withHeader(headerRowArray));
+                    logger.debug("Creating csv file: {}", fileName);
+                }
+                csvPrinter.printRecord(orderedCsvRecords.get(index));
+                previousFileNumber = fileNumber;
+            }
+
+            logger.info("Completed splitting csv into {} files.", previousFileNumber);
+            if (writer != null) writer.close();
+        } catch (IOException e)
+        {
+            logger.error("Error creating a split csv file for: {}", sourceCsvFileName, e);
+        }
+    }
+
+    /**
      * Replaces all occurrences of source mappings in the specified CSV file and outputs the result to the target CSV
      * file (specified in the config settings).
      *
@@ -458,17 +518,18 @@ public class Main
      */
     private static void updateCsvFileWithMappings(List<String> sourceCsvFiles, String targetCsvFileName, List<Map<String, String>> mappingsList)
     {
-        logger.info("Updating usernames in CSV file(s) and writing to {}...", targetCsvFileName);
+        logger.info("Updating usernames and issue types in CSV file(s) and writing to {}...", targetCsvFileName);
+
+        // Combine the username and issue type mappings together so we don't have to loop over the file(s) twice
+        String[] sourceNames = mappingsList.stream().map(Map::keySet).flatMap(Collection::stream).toArray(String[]::new);
+        String[] targetNames = mappingsList.stream().map(Map::values).flatMap(Collection::stream).toArray(String[]::new);
+
         try (PrintWriter writer = new PrintWriter(targetCsvFileName))
         {
             for (String sourceCsvFileName : sourceCsvFiles)
             {
-                // Replace all instances of the source usernames in the CSV file with the target usernames.
-                // For any source usernames that don't exist in the target Jira instance, the default username will be used.
+                // Replace all instances of the source values in the CSV file with the target values.
                 BufferedReader bufferedReader = new BufferedReader(new FileReader(sourceCsvFileName));
-
-                String[] sourceNames = mappingsList.stream().map(Map::keySet).flatMap(Collection::stream).toArray(String[]::new);
-                String[] targetNames = mappingsList.stream().map(Map::values).flatMap(Collection::stream).toArray(String[]::new);
 
                 String line;
                 while ((line = bufferedReader.readLine()) != null)

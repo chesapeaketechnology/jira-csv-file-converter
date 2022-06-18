@@ -43,6 +43,8 @@ public class ParseUtils
         // We should only have two names left...
         if (remainingNames.size() != 2)
         {
+            // TODO KMB: This doesn't handle compound names well (e.g. Ann Marie Smith or Jean-Claude Van Damme). We
+            //  should update it to take a guess or maybe try both options (compound first name and compound last name).
             logger.warn("Invalid number of fields left; should only have first and last. Fields: {}", remainingNames);
             return null;
         }
@@ -53,6 +55,55 @@ public class ParseUtils
         }
 
         return remainingNames;
+    }
+
+    /**
+     * Get just the name portion of a file name, excluding the path and the extension.
+     *
+     * @param fileName The name name to parse
+     * @return The name of the file with no path or extension
+     * @since 1.1
+     */
+    public static String getFileNameWithoutPathOrExtension(String fileName)
+    {
+        return getParsedFileName(fileName, true, true);
+    }
+
+    /**
+     * Get just the name portion of a file name, excluding the extension.
+     *
+     * @param fileName The name name to parse
+     * @return The name of the file with no extension
+     * @since 1.1
+     */
+    public static String getFileNameWithoutExtension(String fileName)
+    {
+        return getParsedFileName(fileName, false, true);
+    }
+
+    /**
+     * Get a parsed version of the file name, with the specified portions removed.
+     *
+     * @param fileName        The name name to parse
+     * @param removePath      True if the path should be removed
+     * @param removeExtension True if the extension should be removed
+     * @return The name of the file with the specified portions removed
+     * @since 1.1
+     */
+    private static String getParsedFileName(String fileName, boolean removePath, boolean removeExtension)
+    {
+        final int indexOfExtension = fileName.lastIndexOf('.');
+        final int lastUnixPos = fileName.lastIndexOf('/');
+        final int lastWindowsPos = fileName.lastIndexOf('\\');
+        final int indexOfLastSeparator = Math.max(lastUnixPos, lastWindowsPos);
+
+        if (removeExtension && indexOfExtension > indexOfLastSeparator)
+        {
+            return fileName.substring(removePath ? indexOfLastSeparator : 0, indexOfExtension);
+        } else
+        {
+            return fileName.substring(removePath ? indexOfLastSeparator : 0);
+        }
     }
 
     private ParseUtils()

@@ -25,7 +25,9 @@
    the projectKey list in the application configuration file.  
    Use `gradlew createIssueTypeMap -Dconfig.file=path/to/config-file` to generate an issue type mapping file.
 
-6. Execute the `updateCsvFile` task to update the CSV export based on the mapping files:
+TODO KMB: Need info on updating the ordering of the issue types (or do it in the script). Epic should be first, sub task should be last
+
+7. Execute the `updateCsvFile` task to update the CSV export based on the mapping files:
    `gradlew updateCsvFile -Dconfig.file=path/to/config-file`
 
    For example, if the config file was copied to the root of the repo:

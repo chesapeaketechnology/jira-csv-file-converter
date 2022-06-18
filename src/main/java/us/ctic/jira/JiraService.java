@@ -17,7 +17,6 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.conn.BasicHttpClientConnectionManager;
 import org.apache.http.message.BasicHeader;
-import org.apache.http.protocol.HttpContext;
 import org.apache.http.ssl.SSLContexts;
 import org.apache.http.ssl.TrustStrategy;
 import org.apache.http.util.EntityUtils;
@@ -61,11 +60,6 @@ public class JiraService
     private final String projectKey;
     private final BasicHeader authorizationHeader;
 
-    public JiraService(String host, String username, String password, String token)
-    {
-        this(host, username, password, token, null);
-    }
-
     public JiraService(String host, String username, String password, String token, String projectKey)
     {
         this.host = host;
@@ -73,7 +67,7 @@ public class JiraService
 
         String userPass = username + ":" + password;
         String encodedCredentials = "Basic " + Base64.getEncoder().encodeToString(userPass.getBytes());
-        if(token != null && !token.isEmpty())
+        if (token != null && !token.isEmpty())
         {
             encodedCredentials = "Bearer " + token;
         }
@@ -164,8 +158,7 @@ public class JiraService
             httpGet.addHeader(authorizationHeader);
 
             return httpClient.execute(httpGet, new IssueTypeHandler());
-        }
-        catch (IOException | URISyntaxException e)
+        } catch (IOException | URISyntaxException e)
         {
             logger.error("Error connecting to Jira for issue types with {}", host, e);
         }
@@ -381,23 +374,20 @@ public class JiraService
     {
 
         @Override
-        public Set<String> handleEntity(HttpEntity entity) throws IOException
+        public Set<String> handleEntity(HttpEntity entity)
         {
             try
             {
                 String jsonString = EntityUtils.toString(entity);
                 JiraExpand jiraExpand = OBJECT_MAPPER.readValue(jsonString, new ExpandReference());
-                if(jiraExpand == null)
-                {
-                    return Collections.emptySet();
-                }
+                if (jiraExpand == null) return Collections.emptySet();
+
                 return jiraExpand.getProjects().stream()
                         .map(JiraProject::getIssueTypes)
                         .flatMap(Collection::stream)
                         .map(JiraIssueType::getName)
                         .collect(Collectors.toSet());
-            }
-            catch (Exception e)
+            } catch (Exception e)
             {
                 logger.error("Could not parse project data: ", e);
             }

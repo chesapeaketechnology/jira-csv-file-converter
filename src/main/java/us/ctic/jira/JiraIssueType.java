@@ -2,6 +2,7 @@ package us.ctic.jira;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+@SuppressWarnings("unused") // Fields are being set by Jackson
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class JiraIssueType
 {

@@ -2,9 +2,10 @@ package us.ctic.jira;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
+@SuppressWarnings("unused") // Fields are being set by Jackson
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class JiraProject
 {
@@ -42,20 +43,20 @@ public class JiraProject
 
     public List<JiraIssueType> getIssueTypes()
     {
-        return issuetypes;
+        return Collections.unmodifiableList(issuetypes);
     }
 
     @Override
     public String toString()
     {
         return "JiraProject{" +
-                "self='" + self + '\'' +
-                ", id='" + id + '\'' +
-                ", key='" + key + '\'' +
-                ", name='" + name + '\'' +
-                ", avatarUrls=" + avatarUrls +
-                ", issueTypes=" + issuetypes +
-                '}';
+               "self='" + self + '\'' +
+               ", id='" + id + '\'' +
+               ", key='" + key + '\'' +
+               ", name='" + name + '\'' +
+               ", avatarUrls=" + avatarUrls +
+               ", issueTypes=" + issuetypes +
+               '}';
     }
 }
 
