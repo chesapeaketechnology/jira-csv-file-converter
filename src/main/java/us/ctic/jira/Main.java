@@ -372,19 +372,13 @@ public class Main
         Map<String, String> issueTypeMapping = new LinkedHashMap<>();
         for (String sourceIssueTypeName : sourceIssueTypeNames)
         {
-            // TODO KMB: Perhaps I'm missing something, but why not just do something like this? Why are we looking for
-            //  a target string containing the source type instead of equality?
-            //   issueTypeMapping.put(sourceIssueTypeName,
-            //           targetIssueTypeNames.contains(sourceIssueTypeName) ? sourceIssueTypeName : NO_TARGET_MATCH);
+            // Look for containment instead of an exact match for cases like Feature, which may need to may to New Feature
             String targetMatchName = targetIssueTypeNames.stream()
                     .filter(sourceIssueTypeName::contains)
                     .findFirst()
                     .orElse(NO_TARGET_MATCH);
             issueTypeMapping.put(sourceIssueTypeName, targetMatchName);
         }
-
-        // TODO KMB: Currently the issue types need to be sorted manually. Do we want to add something for that here so
-        //  epics are first and subtasks are last? It should probably be something in the config file...
 
         logger.info("Completed issue type mapping: {}", issueTypeMapping);
         return issueTypeMapping;
@@ -398,8 +392,6 @@ public class Main
      */
     private static Map<String, String> cleanMappings(Map<String, String> mapping)
     {
-        // TODO KMB: Why even bother to create the mapping if we are just going to update it later to remove any without
-        //  a target match?
         return mapping.entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, entry ->
                                 entry.getValue().equals(NO_TARGET_MATCH)
